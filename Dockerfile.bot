@@ -1,0 +1,40 @@
+# Build stage for Telegram bot
+FROM golang:1.25.1-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the Telegram bot application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o telegram-bot ./cmd/telegram-bot
+
+# Runtime stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests and ffmpeg for audio processing
+RUN apk --no-cache add ca-certificates ffmpeg
+
+# Create app directory
+WORKDIR /app
+
+# Copy bot binary, migrations, config and fonts from builder
+COPY --from=builder /build/telegram-bot .
+COPY --from=builder /build/internal/repository/migrations ./internal/repository/migrations
+COPY --from=builder /build/internal/config ./internal/config
+COPY --from=builder /build/internal/pkg/formatter/ttf ./ttf
+
+# Bot does not expose HTTP ports; it connects to Telegram, DB and other services
+
+# Run the Telegram bot in production mode
+CMD ["./telegram-bot", "-env=prod"]

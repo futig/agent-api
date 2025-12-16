@@ -1,0 +1,47 @@
+# Build stage for API
+FROM golang:1.25.1-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the API application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o agent-backend ./cmd/agent-backend
+
+# Runtime stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests and ffmpeg for audio processing
+RUN apk --no-cache add ca-certificates ffmpeg
+
+# Create app directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /build/agent-backend .
+
+# Copy migrations, API docs, config and fonts
+COPY --from=builder /build/internal/repository/migrations ./internal/repository/migrations
+COPY --from=builder /build/internal/config ./internal/config
+COPY --from=builder /build/docs ./docs
+COPY --from=builder /build/internal/pkg/formatter/ttf ./ttf
+
+# Create data directory for file storage
+RUN mkdir -p /app/data
+
+# Expose API port
+EXPOSE 8080
+
+# Run the API application in production mode
+CMD ["./agent-backend", "-env=prod"]

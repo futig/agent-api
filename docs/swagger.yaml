@@ -1,0 +1,1059 @@
+openapi: 3.0.3
+info:
+  title: Interview-to-Business-Requirements Agent API
+  description: |
+    API for converting business stakeholder interviews into standardized business requirements.
+
+    This service orchestrates three external services (RAG, LLM, ASR) to:
+    - Generate context-aware interview questions
+    - Process text and audio interviews
+    - Automatically produce business requirements and artifacts
+
+    **Workflow:**
+    1. Create a project with business context files
+    2. Start an interview session with user goal
+    3. Answer generated questions (text or audio)
+    4. Receive validated business requirements
+  version: 1.0.0
+  contact:
+    name: Agent Backend Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Documentation
+    description: API documentation endpoints
+  - name: Projects
+    description: Project and file management operations
+  - name: Sessions
+    description: Interview session management and question answering
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns the health status of the API
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+
+  /docs:
+    get:
+      summary: Swagger UI documentation
+      description: Interactive API documentation using Swagger UI
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: Swagger UI HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /swagger.yaml:
+    get:
+      summary: OpenAPI specification file
+      description: Returns the OpenAPI 3.0.3 specification in YAML format
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+
+  /projects:
+    post:
+      summary: Create new project
+      description: |
+        Creates a new project with uploaded context files and indexes them in RAG.
+
+        **Process:**
+        1. Validates and reads uploaded files into memory
+        2. Indexes files in RAG (vector embeddings)
+        3. Saves file metadata to database
+        4. Returns immediately with HTTP 202
+        5. Sends callback with final project data when complete
+      tags:
+        - Projects
+      parameters:
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Request ID for tracking async operations
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - title
+                - files
+                - description
+                - callback_url
+              properties:
+                title:
+                  type: string
+                  description: Project title
+                  example: "E-commerce Platform Redesign"
+                description:
+                  type: string
+                  description: Project description
+                  example: "Requirements for redesigning the checkout flow"
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Context files (.txt, .md, .docx) - max 10 files, 50MB total
+                callback_url:
+                  type: string
+                  format: uri
+                  description: URL to receive completion callback
+                  example: "https://example.com/webhooks/project-created"
+      responses:
+        '202':
+          description: Project creation accepted and being processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncStatusResponse'
+              example:
+                status: "accepted"
+                message: "project creation is being processed"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                no_files:
+                  value:
+                    error: "Bad Request"
+                    message: "at least one file is required"
+                invalid_file:
+                  value:
+                    error: "Bad Request"
+                    message: "invalid file"
+
+    get:
+      summary: List projects
+      description: Retrieve a paginated list of all projects
+      tags:
+        - Projects
+      parameters:
+        - name: skip
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Number of projects to skip
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
+          description: Maximum number of projects to return
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProjectsResponse'
+              example:
+                projects:
+                  - id: "550e8400-e29b-41d4-a716-446655440000"
+                    title: "E-commerce Platform"
+                    description: "Checkout flow redesign"
+                  - id: "660e8400-e29b-41d4-a716-446655440001"
+                    title: "Mobile Banking App"
+                    description: "Payment integration requirements"
+
+  /projects/{project_id}:
+    get:
+      summary: Get project details
+      description: Retrieve detailed information about a specific project including all files
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetailResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                title: "E-commerce Platform"
+                description: "Checkout flow redesign"
+                size: 524288
+                files:
+                  - id: "770e8400-e29b-41d4-a716-446655440002"
+                    name: "requirements.txt"
+                    size: 102400
+                    created_at: "2024-12-08T10:30:00Z"
+                  - id: "880e8400-e29b-41d4-a716-446655440003"
+                    name: "design_specs.md"
+                    size: 421888
+                    created_at: "2024-12-08T10:30:05Z"
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Not Found"
+                message: "resource not found"
+
+    delete:
+      summary: Delete project
+      description: Deletes a project, its files, and RAG index
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+      responses:
+        '200':
+          description: Project deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Add files to project
+      description: |
+        Adds additional files to an existing project.
+
+        **Process:**
+        1. Validates and reads new files
+        2. Indexes files in RAG
+        3. Saves file metadata to database
+        4. Returns immediately with HTTP 202
+        5. Sends callback with updated project data when complete
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Request ID for tracking
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - files
+                - callback_url
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Additional context files
+                callback_url:
+                  type: string
+                  format: uri
+                  example: "https://example.com/webhooks/files-added"
+      responses:
+        '202':
+          description: Files are being processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncStatusResponse'
+              example:
+                status: "accepted"
+                message: "files are being processed"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /projects/{project_id}/files:
+    get:
+      summary: List project files
+      description: Retrieve all files associated with a project
+      tags:
+        - Projects
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListFilesResponse'
+              example:
+                files:
+                  - id: "770e8400-e29b-41d4-a716-446655440002"
+                    name: "requirements.txt"
+                    size: 102400
+                    created_at: "2024-12-08T10:30:00Z"
+                  - id: "880e8400-e29b-41d4-a716-446655440003"
+                    name: "design_specs.md"
+                    size: 421888
+                    created_at: "2024-12-08T10:30:05Z"
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /interview-session:
+    post:
+      summary: Start interview session
+      description: |
+        Creates a new interview session and generates initial questions.
+
+        **Process:**
+        1. Creates session with user goal
+        2. Retrieves RAG context from project files (if project_id provided)
+        3. Generates interview questions via LLM
+        4. Returns immediately with HTTP 202
+        5. Sends callback with first question block
+
+        **Two modes:**
+        - With `project_id`: Uses RAG context from project files
+        - With `context_questions`: Uses manual Q&A context
+      tags:
+        - Sessions
+      parameters:
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartSessionRequest'
+            examples:
+              with_project:
+                summary: Session with project context
+                value:
+                  project_id: "550e8400-e29b-41d4-a716-446655440000"
+                  user_goal: "Generate requirements for user authentication flow"
+                  callback_url: "https://example.com/webhooks/session-started"
+              with_manual_context:
+                summary: Session with manual context
+                value:
+                  user_goal: "Create requirements for payment processing"
+                  context_questions:
+                    - question: "What payment methods should be supported?"
+                      answer: "Credit cards, PayPal, and bank transfers"
+                    - question: "What is the expected transaction volume?"
+                      answer: "Approximately 10,000 transactions per day"
+                  callback_url: "https://example.com/webhooks/session-started"
+      responses:
+        '202':
+          description: Session creation is being processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncStatusResponse'
+              example:
+                status: "accepted"
+                message: "session creation is being processed"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Bad Request"
+                message: "validation failed"
+
+  /interview-session/{id}:
+    get:
+      summary: Get session status
+      description: Retrieve current session state and progress
+      tags:
+        - Sessions
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDTO'
+              example:
+                session_id: "990e8400-e29b-41d4-a716-446655440004"
+                project_id: "550e8400-e29b-41d4-a716-446655440000"
+                session_status: "WAITING_FOR_ANSWERS"
+                iteration_number: 2
+                created_at: "2024-12-08T11:00:00Z"
+                updated_at: "2024-12-08T11:15:30Z"
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /interview-session/{id}/answer/{question_id}:
+    post:
+      summary: Submit text answer
+      description: |
+        Submit a text answer for a specific question.
+
+        **Process:**
+        1. Saves answer to database
+        2. Returns immediately with HTTP 202
+        3. Checks if more questions exist in current iteration
+        4. If iteration complete, validates all answers
+        5. Either sends next questions or final requirements via callback
+      tags:
+        - Sessions
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Question ID to answer
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAnswerRequest'
+            examples:
+              with_answer:
+                summary: Submit answer
+                value:
+                  answers: "We need to support OAuth 2.0, SAML, and traditional username/password authentication"
+                  is_skipped: false
+                  callback_url: "https://example.com/webhooks/answer-processed"
+              skip_question:
+                summary: Skip question
+                value:
+                  answers: ""
+                  is_skipped: true
+                  callback_url: "https://example.com/webhooks/answer-processed"
+      responses:
+        '202':
+          description: Answer is being processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncStatusResponse'
+              example:
+                status: "accepted"
+                message: "answer is being processed"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Session or question not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /interview-session/{id}/answer/audio/{question_id}:
+    post:
+      summary: Submit audio answer
+      description: |
+        Submit an audio answer for a specific question.
+
+        **Process:**
+        1. Validates audio file (WAV only)
+        2. Returns immediately with HTTP 202
+        3. Transcribes audio using ASR service
+        4. Processes as text answer (same flow as text submission)
+      tags:
+        - Sessions
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - audio
+                - callback_url
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: Audio file (WAV format only, max 10MB)
+                is_skipped:
+                  type: boolean
+                  default: false
+                  description: Whether to skip this question
+                callback_url:
+                  type: string
+                  format: uri
+                  example: "https://example.com/webhooks/audio-processed"
+      responses:
+        '202':
+          description: Audio answer is being processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncStatusResponse'
+              example:
+                status: "accepted"
+                message: "audio answer is being processed"
+        '400':
+          description: Validation error (invalid format, size, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Bad Request"
+                message: "invalid file"
+        '404':
+          description: Session or question not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /interview-session/{id}/result:
+    get:
+      summary: Get session result
+      description: Retrieve the final business requirements document
+      tags:
+        - Sessions
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [markdown, docx, pdf]
+            default: markdown
+          description: Output format for requirements document
+      responses:
+        '200':
+          description: Business requirements document
+          content:
+            text/markdown:
+              schema:
+                type: string
+              example: |
+                # Business Requirements Document
+
+                ## User Authentication Flow
+
+                ### Overview
+                The system shall support multiple authentication methods...
+
+                ### User Stories
+                1. As a user, I want to log in using OAuth 2.0...
+
+                ### Business Rules
+                - BR-001: Password must be at least 12 characters...
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Session not found or no result available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Session not completed yet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Conflict"
+                message: "invalid session state"
+
+  /interview-session/{id}/cancel:
+    post:
+      summary: Cancel session
+      description: Cancel an active interview session
+      tags:
+        - Sessions
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          description: Session cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "session cancelled successfully"
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Session already completed or cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    ProjectIdParam:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Project UUID
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+    SessionIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Session UUID
+      example: "990e8400-e29b-41d4-a716-446655440004"
+
+  schemas:
+    AsyncStatusResponse:
+      type: object
+      required:
+        - status
+        - message
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+          description: Request acceptance status
+        message:
+          type: string
+          description: Human-readable message about async processing
+      example:
+        status: "accepted"
+        message: "request is being processed"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: HTTP status text
+          example: "Bad Request"
+        message:
+          type: string
+          description: Detailed error message
+          example: "validation failed"
+
+    StartSessionRequest:
+      type: object
+      required:
+        - user_goal
+      properties:
+        project_id:
+          type: string
+          format: uuid
+          description: Existing project ID for RAG context (optional)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        user_goal:
+          type: string
+          description: What the user wants to achieve
+          example: "Generate requirements for user authentication system"
+          minLength: 10
+        context_questions:
+          type: array
+          description: Manual context Q&A (used when no project_id)
+          items:
+            $ref: '#/components/schemas/QuestionWithAnswer'
+        callback_url:
+          type: string
+          format: uri
+          description: URL to receive async responses
+          example: "https://example.com/webhooks/session-callback"
+
+    QuestionWithAnswer:
+      type: object
+      required:
+        - question
+        - answer
+      properties:
+        question:
+          type: string
+          example: "What authentication methods should be supported?"
+        answer:
+          type: string
+          example: "OAuth 2.0, SAML, and username/password"
+
+    SubmitAnswerRequest:
+      type: object
+      required:
+        - answers
+        - is_skipped
+        - callback_url
+      properties:
+        answers:
+          type: string
+          description: Text answer to the question
+          example: "The system should support OAuth 2.0, SAML, and traditional credentials"
+        is_skipped:
+          type: boolean
+          description: Whether to skip this question
+          default: false
+        callback_url:
+          type: string
+          format: uri
+          example: "https://example.com/webhooks/answer-callback"
+
+    ListProjectsResponse:
+      type: object
+      required:
+        - projects
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectSummary'
+
+    ProjectSummary:
+      type: object
+      required:
+        - id
+        - title
+        - description
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        title:
+          type: string
+          example: "E-commerce Platform"
+        description:
+          type: string
+          example: "Checkout flow redesign requirements"
+
+    ProjectDetailResponse:
+      type: object
+      required:
+        - id
+        - title
+        - description
+        - size
+        - files
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        size:
+          type: integer
+          format: int64
+          description: Total size of all files in bytes
+          example: 524288
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDetail'
+
+    FileDetail:
+      type: object
+      required:
+        - id
+        - name
+        - size
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "770e8400-e29b-41d4-a716-446655440002"
+        name:
+          type: string
+          example: "requirements.txt"
+        size:
+          type: integer
+          format: int64
+          example: 102400
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-12-08T10:30:00Z"
+
+    ListFilesResponse:
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDetail'
+
+    SessionDTO:
+      type: object
+      required:
+        - session_id
+        - session_status
+        - iteration_number
+        - created_at
+        - updated_at
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          example: "990e8400-e29b-41d4-a716-446655440004"
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        session_status:
+          $ref: '#/components/schemas/SessionStatus'
+        iteration_number:
+          type: integer
+          description: Current iteration number
+          example: 2
+        final_result:
+          type: string
+          nullable: true
+          description: Generated business requirements (only when status is DONE)
+        error:
+          type: string
+          nullable: true
+          description: Error message (only when status is ERROR)
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-12-08T11:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2024-12-08T11:15:30Z"
+
+    SessionStatus:
+      type: string
+      enum:
+        - NEW
+        - ASK_USER_GOAL
+        - SELECT_OR_CREATE_PROJECT
+        - ASK_USER_CONTEXT
+        - CHOOSE_MODE
+        - INTERVIEW_INFO
+        - DRAFT_INFO
+        - GENERATING_QUESTIONS
+        - WAITING_FOR_ANSWERS
+        - DRAFT_COLLECTING
+        - VALIDATING
+        - GENERATING_REQUIREMENTS
+        - DONE
+        - ERROR
+        - CANCELED
+      description: |
+        Current session workflow state:
+        - `NEW`: Session created, waiting for user goal
+        - `ASK_USER_GOAL`: Requesting project description
+        - `SELECT_OR_CREATE_PROJECT`: Choose existing or create new project
+        - `ASK_USER_CONTEXT`: Manual context questions (if no project)
+        - `CHOOSE_MODE`: Select Interview or Draft mode
+        - `INTERVIEW_INFO`: Explain interview format
+        - `DRAFT_INFO`: Explain draft format
+        - `GENERATING_QUESTIONS`: Generating questions via LLM
+        - `WAITING_FOR_ANSWERS`: Waiting for user answers
+        - `DRAFT_COLLECTING`: Collecting draft materials
+        - `VALIDATING`: Validating answers
+        - `GENERATING_REQUIREMENTS`: Generating business requirements
+        - `DONE`: Session completed successfully
+        - `ERROR`: Session failed with error
+        - `CANCELED`: Session cancelled by user
+
+    IterationWithQuestions:
+      type: object
+      description: A block of interview questions (sent via callback)
+      required:
+        - session_id
+        - iteration_id
+        - iteration_number
+        - title
+        - questions
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          example: "990e8400-e29b-41d4-a716-446655440004"
+        iteration_id:
+          type: string
+          format: uuid
+          example: "aa0e8400-e29b-41d4-a716-446655440005"
+        iteration_number:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: "Authentication Requirements"
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionDTO'
+
+    QuestionDTO:
+      type: object
+      required:
+        - id
+        - question_number
+        - status
+        - question
+        - explanation
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "bb0e8400-e29b-41d4-a716-446655440006"
+        question_number:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [UNANSWERED, SKIPED, ANSWERED]
+          example: "UNANSWERED"
+        question:
+          type: string
+          example: "What authentication methods should the system support?"
+        explanation:
+          type: string
+          example: "Understanding supported auth methods helps define security requirements and integration complexity"
+
+    CallbackProjectUpdatedData:
+      type: object
+      description: Callback payload sent when project creation/update completes
+      required:
+        - id
+        - title
+        - description
+        - size
+        - files
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        size:
+          type: integer
+          format: int64
+          description: Total size of all files
+        files:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - name
+              - size
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              size:
+                type: integer
+                format: int64
