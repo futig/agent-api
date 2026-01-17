@@ -33,7 +33,8 @@ The system integrates with external LLM, RAG, and ASR services to:
 - **LLM Service** - Question generation, validation, summary creation
 - **RAG Service** - Document indexing and context retrieval
 - **ASR Service** - Audio transcription (WAV format)
-- **Callback Service** - Async operation notifications
+
+Repositiry with external services - https://github.com/EgorKolovev/bysiness_analyst
 
 ### Telegram Integration
 - **go-telegram-bot-api/v5** - Bot framework
